@@ -77,7 +77,7 @@ python orchestrator.py --run-now
 | Command | What it does |
 |---|---|
 | `python orchestrator.py --run-now` | One full pipeline run (fetch → summarize → write → deliver if Friday), then exit |
-| `python orchestrator.py --schedule` | Run forever; executes daily at **07:00 EAT (04:00 UTC)**. Use on the server. |
+| `python orchestrator.py --schedule` | Run forever; executes daily at **07:00 EAT (Africa/Nairobi)**, regardless of host timezone. Use on the server. |
 | `python orchestrator.py --test-email` | Send the current workbook only — for testing Gmail credentials |
 
 ### Environment variables (`.env`)
@@ -176,8 +176,10 @@ sudo systemctl status tfn-intelligence.service     # should be "active (running)
 journalctl -u tfn-intelligence.service -f          # live logs
 ```
 
-The scheduler logs "Scheduler started…" on boot, runs once immediately if it
-hasn't run today (missed-run recovery), then fires daily at 07:00 EAT.
+The scheduler logs "Scheduler started…" on boot, then fires once daily at
+07:00 EAT. If the service is (re)started after 07:00 EAT on a day it hasn't yet
+run, it runs immediately (missed-run recovery). A per-day sentinel in `logs/`
+makes runs idempotent, so a restart never sends a duplicate report.
 
 ### Operations
 
@@ -197,8 +199,10 @@ tail -f /opt/tfn/tfn-intelligence/logs/run-$(date +%F).log
 - No database, message broker, or web server is required.
 
 ### Timezone note
-The scheduler converts 07:00 EAT to 04:00 UTC internally, so it works correctly
-regardless of the server's local timezone. No `timedatectl` change is needed.
+The scheduler is anchored to the **Africa/Nairobi** timezone in code, so it
+fires at 07:00 EAT on any host regardless of the server's local timezone.
+No `timedatectl` change is needed. (Requires OS tzdata, present by default on
+Ubuntu/Debian; install `tzdata` if running a minimal container image.)
 
 ---
 

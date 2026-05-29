@@ -11,16 +11,18 @@ import argparse
 import logging
 import os
 import sys
-from datetime import datetime
-
-import schedule
 import time
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 from dotenv import load_dotenv
 
 load_dotenv()
 
 from config import LOG_DIR, SEND_DAY, SEND_TIME_EAT, WORKBOOK_PATH
 from agents import io_agent, summarizer_agent, excel_agent
+
+EAT = ZoneInfo("Africa/Nairobi")
 
 
 def _setup_logging() -> None:
@@ -90,8 +92,8 @@ def run_daily() -> None:
     )
     logger.info("Workbook total rows: %d", excel_agent.get_row_count())
 
-    # --- Friday delivery ---
-    today = datetime.now().strftime("%A")
+    # --- Friday delivery (based on EAT, not host-local time) ---
+    today = datetime.now(EAT).strftime("%A")
     if today == SEND_DAY:
         logger.info("Today is %s — sending workbook to recipients", SEND_DAY)
         try:
@@ -117,26 +119,37 @@ def run_test_email() -> None:
         logger.error("Test email failed — check GMAIL_SENDER and GMAIL_APP_PASSWORD in .env")
 
 
+def _sentinel_path(eat_date: str) -> str:
+    return os.path.join(LOG_DIR, f"ran-{eat_date}.sentinel")
+
+
 def run_scheduler() -> None:
-    """Start the daily scheduler. Runs indefinitely — use with systemd on VPS."""
-    # Convert EAT (UTC+3) to UTC for the schedule library
-    eat_hour, eat_minute = map(int, SEND_TIME_EAT.split(":"))
-    utc_hour = (eat_hour - 3) % 24
-    utc_time = f"{utc_hour:02d}:{eat_minute:02d}"
+    """Run the pipeline once per day at SEND_TIME_EAT, anchored to Africa/Nairobi.
 
-    logger.info("Scheduler started. Will run daily at %s EAT (%s UTC)", SEND_TIME_EAT, utc_time)
-    schedule.every().day.at(utc_time).do(run_daily)
+    Timezone-independent: behaves identically regardless of the host's local
+    timezone. A per-day sentinel makes runs idempotent, so a process restart
+    (e.g. systemd Restart=on-failure) never triggers a duplicate run or email.
+    """
+    os.makedirs(LOG_DIR, exist_ok=True)
+    send_hour, send_minute = map(int, SEND_TIME_EAT.split(":"))
 
-    # Run immediately on startup if today's run hasn't happened yet (missed-run recovery)
-    sentinel_path = os.path.join("logs", f"ran-{datetime.now().strftime('%Y-%m-%d')}.sentinel")
-    if not os.path.exists(sentinel_path):
-        logger.info("No sentinel found for today — running immediately")
-        run_daily()
-        open(sentinel_path, "w").close()
-        schedule.every().day.at(utc_time).do(lambda: open(sentinel_path, "w").close())
+    logger.info("Scheduler started. Will run daily at %s EAT (Africa/Nairobi)", SEND_TIME_EAT)
 
     while True:
-        schedule.run_pending()
+        now = datetime.now(EAT)
+        today = now.strftime("%Y-%m-%d")
+        sentinel = _sentinel_path(today)
+        due = (now.hour, now.minute) >= (send_hour, send_minute)
+
+        if due and not os.path.exists(sentinel):
+            logger.info("Daily run due for %s EAT — starting", today)
+            try:
+                run_daily()
+            finally:
+                # Mark the day done even if the run raised, so we don't loop-retry
+                # a hard failure every 30s. The next attempt is tomorrow.
+                open(sentinel, "w").close()
+
         time.sleep(30)
 
 
