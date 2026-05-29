@@ -1,0 +1,19 @@
+# Secrets / credentials
+**/.env
+**/credentials/
+**/token.json
+
+# Data & logs
+**/data/
+**/logs/
+
+# Python
+**/venv/
+**/__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# macOS
+.DS_Store
+**/.DS_Store
